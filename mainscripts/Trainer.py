@@ -186,12 +186,16 @@ def main(args, device_args):
 
     no_preview = args.get('no_preview', False)
 
+    # server to client
     s2c = queue.Queue()
+    # client to server
     c2s = queue.Queue()
 
+    # start another thread to train
     thread = threading.Thread(target=trainerThread, args=(s2c, c2s, args, device_args) )
     thread.start()
 
+    # main thread handle listening for user preview info
     if no_preview:
         while True:
             if not c2s.empty():
@@ -200,6 +204,7 @@ def main(args, device_args):
                 if op == 'close':
                     break
             try:
+                # sleep 100ms every loop in google colab
                 io.process_messages(0.1)
             except KeyboardInterrupt:
                 s2c.put ( {'op': 'close'} )
