@@ -61,7 +61,7 @@ def trainerThread (s2c, c2s, args, device_args):
                     shared_state['after_save'] = True
                     # for enhancing training speed
                     # if colab and model path in runtime machine, copy to google drive
-                    if io.is_colab() and str(model_path).index('workspace') > -1:
+                    if io.is_colab() and str(model_path).find('workspace') == -1:
                         google_drive_model_path = '/content/drive/My Drive/DeepFaceLab/workspace/test'
                         shutil.rmtree(google_drive_model_path)
                         shutil.copytree(str(model_path), google_drive_model_path)
