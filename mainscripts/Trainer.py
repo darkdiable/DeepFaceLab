@@ -26,7 +26,7 @@ def trainerThread (s2c, c2s, args, device_args):
             
             model_path = Path( args.get('model_path', '') )
             model_name = args.get('model_name', '')
-            save_interval_min = 2
+            save_interval_min = 15
             debug = args.get('debug', '')
             execute_programs = args.get('execute_programs', [])
 
@@ -61,11 +61,13 @@ def trainerThread (s2c, c2s, args, device_args):
                     shared_state['after_save'] = True
                     # for enhancing training speed
                     # if colab and model path in runtime machine, copy to google drive
+                    '''
                     if io.is_colab() and str(model_path).find('workspace') == -1:
                         google_drive_model_path = '/content/drive/My Drive/DeepFaceLab/workspace/test'
                         shutil.rmtree(google_drive_model_path)
                         shutil.copytree(str(model_path), google_drive_model_path)
                         io.log_info("Copy model to google drive finished")
+                    '''
 
             def send_preview():
                 if not debug:

@@ -7,6 +7,10 @@ from utils import Path_utils
 from utils import os_utils
 from pathlib import Path
 
+# ignore warnings
+import warnings
+warnings.filterwarnings('ignore')
+
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 6):
     raise Exception("This program requires at least Python 3.6")
 
