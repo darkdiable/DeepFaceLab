@@ -120,8 +120,11 @@ if __name__ == "__main__":
     
     p.set_defaults (func=process_util)
 
+    # train model
     def process_train(arguments):
+        # set training process lowest priority
         os_utils.set_process_lowest_prio()
+        # set command-line config values
         args = {'training_data_src_dir'  : arguments.training_data_src_dir,
                 'training_data_dst_dir'  : arguments.training_data_dst_dir,
                 'pretraining_data_dir'   : arguments.pretraining_data_dir,
