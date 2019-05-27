@@ -7,9 +7,6 @@ from utils import Path_utils
 from utils import os_utils
 from pathlib import Path
 
-# ignore warnings
-import warnings
-warnings.filterwarnings('ignore')
 
 if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 6):
     raise Exception("This program requires at least Python 3.6")
@@ -19,6 +16,11 @@ class fixPathAction(argparse.Action):
         setattr(namespace, self.dest, os.path.abspath(os.path.expanduser(values)))
 
 if __name__ == "__main__":
+    # ignore warnings
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+
     multiprocessing.set_start_method("spawn")
 
     parser = argparse.ArgumentParser()
