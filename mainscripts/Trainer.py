@@ -26,7 +26,8 @@ def trainerThread (s2c, c2s, args, device_args):
             
             model_path = Path( args.get('model_path', '') )
             model_name = args.get('model_name', '')
-            save_interval_min = 15
+            # saving interval 8 mins
+            save_interval_min = 8
             debug = args.get('debug', '')
             execute_programs = args.get('execute_programs', [])
 
