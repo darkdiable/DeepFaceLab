@@ -10,10 +10,9 @@ from utils import Path_utils
 import imagelib
 import cv2
 import models
-import shutil
 from interact import interact as io
 
-def trainerThread (s2c, c2s, args, device_args):
+def trainerThread (s2c, c2s, e, args, device_args):
     while True:
         try:
             start_time = time.time()
@@ -26,7 +25,7 @@ def trainerThread (s2c, c2s, args, device_args):
             
             model_path = Path( args.get('model_path', '') )
             model_name = args.get('model_name', '')
-            # saving interval 8 mins
+            #auto save every 8 min
             save_interval_min = 8
             debug = args.get('debug', '')
             execute_programs = args.get('execute_programs', [])
@@ -60,15 +59,6 @@ def trainerThread (s2c, c2s, args, device_args):
                     io.log_info ("Saving....", end='\r')
                     model.save()
                     shared_state['after_save'] = True
-                    # for enhancing training speed
-                    # if colab and model path in runtime machine, copy to google drive
-                    '''
-                    if io.is_colab() and str(model_path).find('workspace') == -1:
-                        google_drive_model_path = '/content/drive/My Drive/DeepFaceLab/workspace/test'
-                        shutil.rmtree(google_drive_model_path)
-                        shutil.copytree(str(model_path), google_drive_model_path)
-                        io.log_info("Copy model to google drive finished")
-                    '''
 
             def send_preview():
                 if not debug:
@@ -77,6 +67,7 @@ def trainerThread (s2c, c2s, args, device_args):
                 else:
                     previews = [( 'debug, press update for new', model.debug_one_iter())]
                     c2s.put ( {'op':'show', 'previews': previews} )
+                e.set() #Set the GUI Thread as Ready
 
 
             if model.is_first_run():
@@ -197,16 +188,15 @@ def main(args, device_args):
 
     no_preview = args.get('no_preview', False)
 
-    # server to client
     s2c = queue.Queue()
-    # client to server
     c2s = queue.Queue()
 
-    # start another thread to train
-    thread = threading.Thread(target=trainerThread, args=(s2c, c2s, args, device_args) )
+    e = threading.Event()
+    thread = threading.Thread(target=trainerThread, args=(s2c, c2s, e, args, device_args) )
     thread.start()
 
-    # main thread handle listening for user preview info
+    e.wait() #Wait for inital load to occur.
+
     if no_preview:
         while True:
             if not c2s.empty():
@@ -215,7 +205,6 @@ def main(args, device_args):
                 if op == 'close':
                     break
             try:
-                # sleep 100ms every loop in google colab
                 io.process_messages(0.1)
             except KeyboardInterrupt:
                 s2c.put ( {'op': 'close'} )
@@ -307,7 +296,7 @@ def main(args, device_args):
 
             key_events = io.get_key_events(wnd_name)
             key, chr_key, ctrl_pressed, alt_pressed, shift_pressed = key_events[-1] if len(key_events) > 0 else (0,0,False,False,False)
-            
+
             if key == ord('\n') or key == ord('\r'):
                 s2c.put ( {'op': 'close'} )
             elif key == ord('s'):
