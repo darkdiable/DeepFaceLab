@@ -14,10 +14,10 @@ import numpy as np
 import facelib
 import imagelib
 import mathlib
-from facelib import FaceType, FANSegmentator, LandmarksProcessor
+from facelib import FaceType, LandmarksProcessor
 from interact import interact as io
 from joblib import Subprocessor
-from nnlib import nnlib
+from nnlib import TernausNet, nnlib
 from utils import Path_utils
 from utils.cv2_utils import *
 from utils.DFLJPG import DFLJPG
@@ -27,13 +27,14 @@ DEBUG = False
 
 class ExtractSubprocessor(Subprocessor):
     class Data(object):
-        def __init__(self, filename=None, rects=None, landmarks = None, landmarks_accurate=True, pitch_yaw_roll=None, final_output_files = None):
+        def __init__(self, filename=None, rects=None, landmarks = None, landmarks_accurate=True, pitch_yaw_roll=None, force_output_path=None, final_output_files = None):
             self.filename = filename
             self.rects = rects or []
             self.rects_rotation = 0
             self.landmarks_accurate = landmarks_accurate
             self.landmarks = landmarks or []
             self.pitch_yaw_roll = pitch_yaw_roll
+            self.force_output_path = force_output_path
             self.final_output_files = final_output_files or []
             self.faces_detected = 0
 
@@ -76,7 +77,7 @@ class ExtractSubprocessor(Subprocessor):
                     self.e = facelib.DLIBExtractor(nnlib.dlib)
                 elif self.type == 'rects-s3fd':
                     nnlib.import_all (device_config)
-                    self.e = facelib.S3FDExtractor()
+                    self.e = facelib.S3FDExtractor(do_dummy_predict=True)
                 else:
                     raise ValueError ("Wrong type.")
 
@@ -88,14 +89,14 @@ class ExtractSubprocessor(Subprocessor):
                 self.e = facelib.FANExtractor()
                 self.e.__enter__()
                 if self.device_vram >= 2:
-                    self.second_pass_e = facelib.S3FDExtractor()
+                    self.second_pass_e = facelib.S3FDExtractor(do_dummy_predict=False)
                     self.second_pass_e.__enter__()
                 else:
                     self.second_pass_e = None
                     
             elif self.type == 'fanseg':
                 nnlib.import_all (device_config)
-                self.e = facelib.FANSegmentator(256, FaceType.toString(FaceType.FULL) )
+                self.e = TernausNet(256, FaceType.toString(FaceType.FULL) )
                 self.e.__enter__()
                     
             elif self.type == 'final':
@@ -158,11 +159,7 @@ class ExtractSubprocessor(Subprocessor):
                             break
                         
                     if self.max_faces_from_image != 0 and len(data.rects) > 1:
-                        #sort by largest area first
-                        x = [ [(l,t,r,b), (r-l)*(b-t) ]  for (l,t,r,b) in data.rects]
-                        x = sorted(x, key=operator.itemgetter(1), reverse=True )
-                        x = [ a[0] for a in x]
-                        data.rects = x[0:self.max_faces_from_image]
+                        data.rects = data.rects[0:self.max_faces_from_image]
 
                 return data
 
@@ -221,6 +218,7 @@ class ExtractSubprocessor(Subprocessor):
                 else:
                     face_idx = 0
                     for rect, image_landmarks in zip( rects, landmarks ):
+                        
                         if src_dflimg is not None and face_idx > 1:
                             #cannot extract more than 1 face from dflimg
                             break
@@ -245,20 +243,25 @@ class ExtractSubprocessor(Subprocessor):
                             rect_area      = mathlib.polygon_area(np.array(rect[[0,2,2,0]]), np.array(rect[[1,1,3,3]]))
                             landmarks_area = mathlib.polygon_area(landmarks_bbox[:,0], landmarks_bbox[:,1] )
 
-                            if landmarks_area > 4*rect_area: #get rid of faces which umeyama-landmark-area > 4*detector-rect-area
+                            if self.face_type <= FaceType.FULL_NO_ALIGN and landmarks_area > 4*rect_area: #get rid of faces which umeyama-landmark-area > 4*detector-rect-area
                                 continue
 
                             if self.debug_dir is not None:
                                 LandmarksProcessor.draw_rect_landmarks (debug_image, rect, image_landmarks, self.image_size, self.face_type, transparent_mask=True)
 
+                        final_output_path = self.final_output_path                        
+                        if data.force_output_path is not None:
+                            final_output_path = data.force_output_path
+                        
                         if src_dflimg is not None and filename_path.suffix == '.jpg':
                             #if extracting from dflimg and jpg copy it in order not to lose quality
-                            output_file = str(self.final_output_path / filename_path.name)
+                            output_file = str(final_output_path / filename_path.name)
                             if str(filename_path) != str(output_file):
                                 shutil.copy ( str(filename_path), str(output_file) )
                         else:
-                            output_file = '{}_{}{}'.format(str(self.final_output_path / filename_path.stem), str(face_idx), '.jpg')
-                            cv2_imwrite(output_file, face_image, [int(cv2.IMWRITE_JPEG_QUALITY), 85] )
+                            
+                            output_file = '{}_{}{}'.format(str(final_output_path / filename_path.stem), str(face_idx), '.jpg')
+                            cv2_imwrite(output_file, face_image, [int(cv2.IMWRITE_JPEG_QUALITY), 100] )
 
                         DFLJPG.embed_data(output_file, face_type=FaceType.toString(self.face_type),
                                                        landmarks=face_image_landmarks.tolist(),
@@ -283,7 +286,6 @@ class ExtractSubprocessor(Subprocessor):
                     fanseg_mask = self.e.extract( image / 255.0 )
                     src_dflimg.embed_and_set( filename_path_str, 
                                               fanseg_mask=fanseg_mask,
-                                              #fanseg_mask_ver=FANSegmentator.VERSION,
                                               )
         
         #overridable
@@ -305,9 +307,15 @@ class ExtractSubprocessor(Subprocessor):
         self.result = []
 
         self.devices = ExtractSubprocessor.get_devices_for_config(self.manual, self.type, multi_gpu, cpu_only)
-
-        no_response_time_sec = 60 if not self.manual and not DEBUG else 999999
-        super().__init__('Extractor', ExtractSubprocessor.Cli, no_response_time_sec)
+        
+        if self.manual or DEBUG:
+            no_response_time_sec = 999999 
+        elif nnlib.device.backend == 'plaidML':
+            no_response_time_sec = 600
+        else:
+            no_response_time_sec = 60
+            
+        super().__init__('Extractor', ExtractSubprocessor.Cli, no_response_time_sec, initialize_subprocesses_in_serial=(type != 'final'))
 
     #override
     def on_check_run(self):
@@ -546,7 +554,8 @@ class ExtractSubprocessor(Subprocessor):
     def on_result (self, host_dict, data, result):
         if self.manual == True:
             filename, landmarks = result.filename, result.landmarks
-            if len(landmarks) != 0:
+            
+            if len(landmarks) != 0 and landmarks[0] is not None:
                 self.landmarks = landmarks[0]
 
             (h,w,c) = self.image.shape
@@ -617,12 +626,18 @@ class ExtractSubprocessor(Subprocessor):
                 for idx in devices:
                     dev_name = nnlib.device.getDeviceName(idx)
                     dev_vram = nnlib.device.getDeviceVRAMTotalGb(idx)
-
-                    if not manual and (type == 'rects-dlib' or type == 'rects-mt' ):
-                        for i in range ( int (max (1, dev_vram / 2) ) ):
-                            result += [ (idx, 'GPU', '%s #%d' % (dev_name,i) , dev_vram) ]
-                    else:
+                    
+                    count = 1
+                    
+                    if not manual:
+                        if (type == 'rects-mt' ):
+                            count = int (max (1, dev_vram / 2) )
+                            
+                    if count == 1:
                         result += [ (idx, 'GPU', dev_name, dev_vram) ]
+                    else:
+                        for i in range (count):
+                            result += [ (idx, 'GPU', '%s #%d' % (dev_name,i) , dev_vram) ]
 
                 return result
 

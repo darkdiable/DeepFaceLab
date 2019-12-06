@@ -80,7 +80,7 @@ class ModelBase(object):
         yn_str = {True:'y',False:'n'}
 
         if self.iter == 0:
-            io.log_info ("\nModel first run. Enter model options as default for each run.")
+            io.log_info ("\nModel first run.")
 
         if ask_enable_autobackup and (self.iter == 0 or ask_override):
             default_autobackup = False if self.iter == 0 else self.options.get('autobackup',False)
@@ -123,10 +123,11 @@ class ModelBase(object):
                 self.options['sort_by_yaw'] = self.options.get('sort_by_yaw', False)
 
         if ask_random_flip:
-            if (self.iter == 0):
-                self.options['random_flip'] = io.input_bool("Flip faces randomly? (y/n ?:help skip:y) : ", True, help_message="Predicted face will look more naturally without this option, but src faceset should cover all face directions as dst faceset.")
+            default_random_flip = self.options.get('random_flip', True)
+            if (self.iter == 0 or ask_override):
+                self.options['random_flip'] = io.input_bool(f"Flip faces randomly? (y/n ?:help skip:{yn_str[default_random_flip]}) : ", default_random_flip, help_message="Predicted face will look more naturally without this option, but src faceset should cover all face directions as dst faceset.")
             else:
-                self.options['random_flip'] = self.options.get('random_flip', True)
+                self.options['random_flip'] = self.options.get('random_flip', default_random_flip)
 
         if ask_src_scale_mod:
             if (self.iter == 0):
@@ -225,8 +226,14 @@ class ModelBase(object):
                     io.destroy_window(wnd_name)
                 else:
                     self.sample_for_preview = self.generate_next_sample()
-                self.last_sample = self.sample_for_preview
-
+                    
+            try:
+                self.get_static_preview()
+            except:
+                self.sample_for_preview = self.generate_next_sample()
+                
+            self.last_sample = self.sample_for_preview
+            
         ###Generate text summary of model hyperparameters
         #Find the longest key name and value string. Used as column widths.
         width_name = max([len(k) for k in self.options.keys()] + [17]) + 1 # Single space buffer to left edge. Minimum of 17, the length of the longest static string used "Current iteration"
@@ -508,6 +515,10 @@ class ModelBase(object):
     def generate_next_sample(self):
         return [ generator.generate_next() for generator in self.generator_list]
 
+    #overridable
+    def on_success_train_one_iter(self):
+        pass
+        
     def train_one_iter(self):
         sample = self.generate_next_sample()
         iter_time = time.time()
@@ -534,7 +545,8 @@ class ModelBase(object):
                 img = (np.concatenate ( [preview_lh, preview], axis=0 ) * 255).astype(np.uint8)
                 cv2_imwrite (filepath, img )
 
-
+        self.on_success_train_one_iter()
+                
         self.iter += 1
 
         return self.iter, iter_time

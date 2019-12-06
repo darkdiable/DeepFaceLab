@@ -271,6 +271,8 @@ def get_transform_mat (image_landmarks, output_size, face_type, scale=1.0):
 
     if face_type == FaceType.HALF:
         padding = 0
+    elif face_type == FaceType.MID_FULL:
+        padding = int(output_size * 0.06)
     elif face_type == FaceType.FULL:
         padding = (output_size / 64) * 12
     elif face_type == FaceType.HEAD:
@@ -435,9 +437,6 @@ def get_cmask (image_shape, lmrks, eyebrows_expand_mod=1.0):
                          )
                         )
 
-
-    #import code
-    #code.interact(local=dict(globals(), **locals()))
     eyes_fall_dist = w // 32
     eyes_thickness = max( w // 64, 1 )
 
@@ -627,6 +626,9 @@ def draw_rect_landmarks (image, rect, image_landmarks, face_size, face_type, tra
 
     image_to_face_mat = get_transform_mat (image_landmarks, face_size, face_type)
     points = transform_points ( [ (0,0), (0,face_size-1), (face_size-1, face_size-1), (face_size-1,0) ], image_to_face_mat, True)
+    imagelib.draw_polygon (image, points, (0,0,255), 2)
+    
+    points = transform_points ( [ ( int(face_size*0.05), 0), ( int(face_size*0.1), int(face_size*0.1) ), ( 0, int(face_size*0.1) ) ], image_to_face_mat, True)
     imagelib.draw_polygon (image, points, (0,0,255), 2)
 
 def calc_face_pitch(landmarks):

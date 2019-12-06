@@ -20,6 +20,9 @@ class nnlib(object):
 
     dlib = None
 
+    torch = None
+    torch_device = None
+
     keras = None
     keras_contrib = None
 
@@ -63,6 +66,7 @@ UpSampling2D = KL.UpSampling2D
 BatchNormalization = KL.BatchNormalization
 PixelNormalization = nnlib.PixelNormalization
 
+Activation = KL.Activation
 LeakyReLU = KL.LeakyReLU
 ELU = KL.ELU
 ReLU = KL.ReLU
@@ -88,14 +92,17 @@ Model = keras.models.Model
 
 Adam = nnlib.Adam
 RMSprop = nnlib.RMSprop
+LookaheadOptimizer = nnlib.LookaheadOptimizer
 
 modelify = nnlib.modelify
 gaussian_blur = nnlib.gaussian_blur
 style_loss = nnlib.style_loss
 dssim = nnlib.dssim
 
+DenseMaxout = nnlib.DenseMaxout
 PixelShuffler = nnlib.PixelShuffler
 SubpixelUpscaler = nnlib.SubpixelUpscaler
+SubpixelDownscaler = nnlib.SubpixelDownscaler
 Scale = nnlib.Scale
 BlurPool = nnlib.BlurPool
 FUNITAdain = nnlib.FUNITAdain
@@ -125,7 +132,28 @@ UNet = nnlib.UNet
 UNetTemporalPredictor = nnlib.UNetTemporalPredictor
 NLayerDiscriminator = nnlib.NLayerDiscriminator
 """
+    @staticmethod
+    def import_torch(device_config=None):
+        if nnlib.torch is not None:
+            return
 
+        if device_config is None:
+            device_config = nnlib.active_DeviceConfig
+        else:
+            nnlib.active_DeviceConfig = device_config
+
+        if 'CUDA_VISIBLE_DEVICES' in os.environ.keys():
+            os.environ.pop('CUDA_VISIBLE_DEVICES')
+
+        io.log_info ("Using PyTorch backend.")
+        import torch
+        nnlib.torch = torch
+
+        if device_config.cpu_only or device_config.backend == 'plaidML':
+            nnlib.torch_device = torch.device(type='cpu')
+        else:
+            nnlib.torch_device = torch.device(type='cuda', index=device_config.gpu_idxs[0] )
+            torch.cuda.set_device(nnlib.torch_device)
 
     @staticmethod
     def _import_tf(device_config):
@@ -139,6 +167,8 @@ NLayerDiscriminator = nnlib.NLayerDiscriminator
 
         if 'CUDA_VISIBLE_DEVICES' in os.environ.keys():
             os.environ.pop('CUDA_VISIBLE_DEVICES')
+
+        os.environ['CUDA_​CACHE_​MAXSIZE'] = '536870912' #512Mb (32mb default)
 
         os.environ['TF_MIN_GPU_MULTIPROCESSOR_COUNT'] = '2'
         os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' #tf log errors only
@@ -154,13 +184,10 @@ NLayerDiscriminator = nnlib.NLayerDiscriminator
         else:
             config = tf.ConfigProto()
 
-            if device_config.backend != "tensorflow-generic":
-                #tensorflow-generic is system with NVIDIA card, but w/o NVSMI
-                #so dont hide devices and let tensorflow to choose best card
-                visible_device_list = ''
-                for idx in device_config.gpu_idxs:
-                    visible_device_list += str(idx) + ','
-                config.gpu_options.visible_device_list=visible_device_list[:-1]
+            visible_device_list = ''
+            for idx in device_config.gpu_idxs:
+                visible_device_list += str(idx) + ','
+            config.gpu_options.visible_device_list=visible_device_list[:-1]
 
         config.gpu_options.force_gpu_compatible = True
         config.gpu_options.allow_growth = device_config.allow_growth
@@ -471,6 +498,83 @@ NLayerDiscriminator = nnlib.NLayerDiscriminator
         nnlib.PixelShuffler = PixelShuffler
         nnlib.SubpixelUpscaler = PixelShuffler
 
+        if 'tensorflow' in backend:
+            class SubpixelDownscaler(KL.Layer):
+                def __init__(self, size=(2, 2), data_format='channels_last', **kwargs):
+                    super(SubpixelDownscaler, self).__init__(**kwargs)
+                    self.data_format = data_format
+                    self.size = size
+
+                def call(self, inputs):
+
+                    input_shape = K.shape(inputs)
+                    if K.int_shape(input_shape)[0] != 4:
+                        raise ValueError('Inputs should have rank 4; Received input shape:', str(K.int_shape(inputs)))
+
+                    return K.tf.space_to_depth(inputs, self.size[0], 'NHWC')
+
+                def compute_output_shape(self, input_shape):
+                    if len(input_shape) != 4:
+                        raise ValueError('Inputs should have rank ' +
+                                        str(4) +
+                                        '; Received input shape:', str(input_shape))
+
+                    height = input_shape[1] // self.size[0] if input_shape[1] is not None else None
+                    width = input_shape[2] // self.size[1] if input_shape[2] is not None else None
+                    channels = input_shape[3] * self.size[0] * self.size[1]
+
+                    return (input_shape[0], height, width, channels)
+
+                def get_config(self):
+                    config = {'size': self.size,
+                            'data_format': self.data_format}
+                    base_config = super(SubpixelDownscaler, self).get_config()
+
+                    return dict(list(base_config.items()) + list(config.items()))
+        else:
+            class SubpixelDownscaler(KL.Layer):
+                def __init__(self, size=(2, 2), data_format='channels_last', **kwargs):
+                    super(SubpixelDownscaler, self).__init__(**kwargs)
+                    self.data_format = data_format
+                    self.size = size
+
+                def call(self, inputs):
+
+                    input_shape = K.shape(inputs)
+                    if K.int_shape(input_shape)[0] != 4:
+                        raise ValueError('Inputs should have rank 4; Received input shape:', str(K.int_shape(inputs)))
+
+                    batch_size, h, w, c = input_shape[0], input_shape[1], input_shape[2], K.int_shape(inputs)[-1]
+                    rh, rw = self.size
+                    oh, ow = h // rh, w // rw
+                    oc = c * (rh * rw)
+
+                    out = K.reshape(inputs, (batch_size, oh, rh, ow, rw, c))
+                    out = K.permute_dimensions(out, (0, 1, 3, 2, 4, 5))
+                    out = K.reshape(out, (batch_size, oh, ow, oc))
+                    return out
+
+                def compute_output_shape(self, input_shape):
+                    if len(input_shape) != 4:
+                        raise ValueError('Inputs should have rank ' +
+                                        str(4) +
+                                        '; Received input shape:', str(input_shape))
+
+                    height = input_shape[1] // self.size[0] if input_shape[1] is not None else None
+                    width = input_shape[2] // self.size[1] if input_shape[2] is not None else None
+                    channels = input_shape[3] * self.size[0] * self.size[1]
+
+                    return (input_shape[0], height, width, channels)
+
+                def get_config(self):
+                    config = {'size': self.size,
+                            'data_format': self.data_format}
+                    base_config = super(SubpixelDownscaler, self).get_config()
+
+                    return dict(list(base_config.items()) + list(config.items()))
+
+        nnlib.SubpixelDownscaler = SubpixelDownscaler
+
         class BlurPool(KL.Layer):
             """
             https://arxiv.org/abs/1904.11486 https://github.com/adobe/antialiased-cnns
@@ -554,26 +658,8 @@ NLayerDiscriminator = nnlib.NLayerDiscriminator
 
                 reduction_axes = list(range(len(input_shape)))
                 del reduction_axes[self.axis]
-
-                #broadcast_shape = [1] * len(input_shape)
-                #broadcast_shape[self.axis] = input_shape[self.axis]
-                #normed = x# (x - K.reshape(self.moving_mean,broadcast_shape) ) / ( K.sqrt( K.reshape(self.moving_variance,broadcast_shape)) +self.epsilon)
-                #normed *= K.reshape(gamma,[-1]+broadcast_shape[1:] )
-                #normed += K.reshape(beta, [-1]+broadcast_shape[1:] )
-                #mean = K.mean(x, axis=reduction_axes)
-                #self.moving_mean = self.add_weight(shape=(units,), name='moving_mean', initializer='zeros',trainable=False)
-                #self.moving_variance = self.add_weight(shape=(units,), name='moving_variance',initializer='ones', trainable=False)
-
-                #variance = K.var(x, axis=reduction_axes)
-                #sample_size = K.prod([ K.shape(x)[axis] for axis in reduction_axes ])
-                #sample_size = K.cast(sample_size, dtype=K.dtype(x))
-                #variance *= sample_size / (sample_size - (1.0 + self.epsilon))
-
-                #self.add_update([K.moving_average_update(self.moving_mean, mean, self.momentum),
-                #                 K.moving_average_update(self.moving_variance, variance, self.momentum)], None)
-                #return normed
-
                 del reduction_axes[0]
+
                 broadcast_shape = [1] * len(input_shape)
                 broadcast_shape[self.axis] = input_shape[self.axis]
                 mean = K.mean(x, reduction_axes, keepdims=True)
@@ -851,6 +937,211 @@ NLayerDiscriminator = nnlib.NLayerDiscriminator
                 base_config = super(Adam, self).get_config()
                 return dict(list(base_config.items()) + list(config.items()))
         nnlib.Adam = Adam
+        
+        class LookaheadOptimizer(keras.optimizers.Optimizer):
+            def __init__(self, optimizer, sync_period=5, slow_step=0.5, tf_cpu_mode=0, **kwargs):
+                super(LookaheadOptimizer, self).__init__(**kwargs)
+                self.optimizer = optimizer
+                self.tf_cpu_mode = tf_cpu_mode
+                
+                with K.name_scope(self.__class__.__name__):
+                    self.sync_period = K.variable(sync_period, dtype='int64', name='sync_period')
+                    self.slow_step = K.variable(slow_step, name='slow_step')
+
+            @property
+            def lr(self):
+                return self.optimizer.lr
+
+            @lr.setter
+            def lr(self, lr):
+                self.optimizer.lr = lr
+
+            @property
+            def learning_rate(self):
+                return self.optimizer.learning_rate
+
+            @learning_rate.setter
+            def learning_rate(self, learning_rate):
+                self.optimizer.learning_rate = learning_rate
+
+            @property
+            def iterations(self):
+                return self.optimizer.iterations
+
+            def get_updates(self, loss, params):
+                sync_cond = K.equal((self.iterations + 1) // self.sync_period * self.sync_period, (self.iterations + 1))
+
+                e = K.tf.device("/cpu:0") if self.tf_cpu_mode > 0 else None
+                if e: e.__enter__()
+                slow_params = [K.variable(K.get_value(p), name='sp_{}'.format(i)) for i, p in enumerate(params)]
+                if e: e.__exit__(None, None, None)
+                
+                
+                self.updates = self.optimizer.get_updates(loss, params)
+                slow_updates = []
+                for p, sp in zip(params, slow_params):
+                    
+                    e = K.tf.device("/cpu:0") if self.tf_cpu_mode == 2 else None
+                    if e: e.__enter__()
+                    sp_t = sp + self.slow_step * (p - sp)
+                    if e: e.__exit__(None, None, None)
+                    
+                    slow_updates.append(K.update(sp, K.switch(
+                        sync_cond,
+                        sp_t,
+                        sp,
+                    )))
+                    slow_updates.append(K.update_add(p, K.switch(
+                        sync_cond,
+                        sp_t - p,
+                        K.zeros_like(p),
+                    )))
+                
+                self.updates += slow_updates
+                self.weights = self.optimizer.weights + slow_params
+                return self.updates
+
+            def get_config(self):
+                config = {
+                    'optimizer': keras.optimizers.serialize(self.optimizer),
+                    'sync_period': int(K.get_value(self.sync_period)),
+                    'slow_step': float(K.get_value(self.slow_step)),
+                }
+                base_config = super(LookaheadOptimizer, self).get_config()
+                return dict(list(base_config.items()) + list(config.items()))
+
+            @classmethod
+            def from_config(cls, config):
+                optimizer = keras.optimizers.deserialize(config.pop('optimizer'))
+                return cls(optimizer, **config)
+        nnlib.LookaheadOptimizer = LookaheadOptimizer
+        
+        class DenseMaxout(keras.layers.Layer):
+            """A dense maxout layer.
+            A `MaxoutDense` layer takes the element-wise maximum of
+            `nb_feature` `Dense(input_dim, output_dim)` linear layers.
+            This allows the layer to learn a convex,
+            piecewise linear activation function over the inputs.
+            Note that this is a *linear* layer;
+            if you wish to apply activation function
+            (you shouldn't need to --they are universal function approximators),
+            an `Activation` layer must be added after.
+            # Arguments
+                output_dim: int > 0.
+                nb_feature: number of Dense layers to use internally.
+                init: name of initialization function for the weights of the layer
+                    (see [initializations](../initializations.md)),
+                    or alternatively, Theano function to use for weights
+                    initialization. This parameter is only relevant
+                    if you don't pass a `weights` argument.
+                weights: list of Numpy arrays to set as initial weights.
+                    The list should have 2 elements, of shape `(input_dim, output_dim)`
+                    and (output_dim,) for weights and biases respectively.
+                W_regularizer: instance of [WeightRegularizer](../regularizers.md)
+                    (eg. L1 or L2 regularization), applied to the main weights matrix.
+                b_regularizer: instance of [WeightRegularizer](../regularizers.md),
+                    applied to the bias.
+                activity_regularizer: instance of [ActivityRegularizer](../regularizers.md),
+                    applied to the network output.
+                W_constraint: instance of the [constraints](../constraints.md) module
+                    (eg. maxnorm, nonneg), applied to the main weights matrix.
+                b_constraint: instance of the [constraints](../constraints.md) module,
+                    applied to the bias.
+                bias: whether to include a bias
+                    (i.e. make the layer affine rather than linear).
+                input_dim: dimensionality of the input (integer). This argument
+                    (or alternatively, the keyword argument `input_shape`)
+                    is required when using this layer as the first layer in a model.
+            # Input shape
+                2D tensor with shape: `(nb_samples, input_dim)`.
+            # Output shape
+                2D tensor with shape: `(nb_samples, output_dim)`.
+            # References
+                - [Maxout Networks](http://arxiv.org/abs/1302.4389)
+            """
+
+            def __init__(self, output_dim,
+                        nb_feature=4,
+                        kernel_initializer='glorot_uniform',
+                        weights=None,
+                        W_regularizer=None,
+                        b_regularizer=None,
+                        activity_regularizer=None,
+                        W_constraint=None,
+                        b_constraint=None,
+                        bias=True,
+                        input_dim=None,
+                        **kwargs):
+                self.output_dim = output_dim
+                self.nb_feature = nb_feature
+                self.kernel_initializer = keras.initializers.get(kernel_initializer)
+
+                self.W_regularizer = keras.regularizers.get(W_regularizer)
+                self.b_regularizer = keras.regularizers.get(b_regularizer)
+                self.activity_regularizer = keras.regularizers.get(activity_regularizer)
+
+                self.W_constraint = keras.constraints.get(W_constraint)
+                self.b_constraint = keras.constraints.get(b_constraint)
+
+                self.bias = bias
+                self.initial_weights = weights
+                self.input_spec = keras.layers.InputSpec(ndim=2)
+
+                self.input_dim = input_dim
+                if self.input_dim:
+                    kwargs['input_shape'] = (self.input_dim,)
+                super(DenseMaxout, self).__init__(**kwargs)
+
+            def build(self, input_shape):
+                input_dim = input_shape[1]
+                self.input_spec = keras.layers.InputSpec(dtype=K.floatx(),
+                                            shape=(None, input_dim))
+
+                self.W = self.add_weight(shape=(self.nb_feature, input_dim, self.output_dim),
+                                        initializer=self.kernel_initializer,
+                                        name='W',
+                                        regularizer=self.W_regularizer,
+                                        constraint=self.W_constraint)
+                if self.bias:
+                    self.b = self.add_weight(shape=(self.nb_feature, self.output_dim,),
+                                            initializer='zero',
+                                            name='b',
+                                            regularizer=self.b_regularizer,
+                                            constraint=self.b_constraint)
+                else:
+                    self.b = None
+
+                if self.initial_weights is not None:
+                    self.set_weights(self.initial_weights)
+                    del self.initial_weights
+                self.built = True
+
+            def compute_output_shape(self, input_shape):
+                assert input_shape and len(input_shape) == 2
+                return (input_shape[0], self.output_dim)
+
+            def call(self, x):
+                # no activation, this layer is only linear.
+                output = K.dot(x, self.W)
+                if self.bias:
+                    output += self.b
+                output = K.max(output, axis=1)
+                return output
+
+            def get_config(self):
+                config = {'output_dim': self.output_dim,
+                        'kernel_initializer': initializers.serialize(self.kernel_initializer),
+                        'nb_feature': self.nb_feature,
+                        'W_regularizer': regularizers.serialize(self.W_regularizer),
+                        'b_regularizer': regularizers.serialize(self.b_regularizer),
+                        'activity_regularizer': regularizers.serialize(self.activity_regularizer),
+                        'W_constraint': constraints.serialize(self.W_constraint),
+                        'b_constraint': constraints.serialize(self.b_constraint),
+                        'bias': self.bias,
+                        'input_dim': self.input_dim}
+                base_config = super(DenseMaxout, self).get_config()
+                return dict(list(base_config.items()) + list(config.items()))
+        nnlib.DenseMaxout = DenseMaxout
 
         def CAInitializerMP( conv_weights_list ):
             #Convolution Aware Initialization https://arxiv.org/abs/1702.06295
