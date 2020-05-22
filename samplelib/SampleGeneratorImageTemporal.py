@@ -1,10 +1,12 @@
 import traceback
-import numpy as np
+
 import cv2
+import numpy as np
 
-from utils import iter_utils
+from core.joblib import SubprocessGenerator, ThisThreadGenerator
+from samplelib import (SampleGeneratorBase, SampleLoader, SampleProcessor,
+                       SampleType)
 
-from samplelib import SampleType, SampleProcessor, SampleLoader, SampleGeneratorBase
 
 '''
 output_sample_types = [
@@ -14,13 +16,13 @@ output_sample_types = [
 '''
 class SampleGeneratorImageTemporal(SampleGeneratorBase):
     def __init__ (self, samples_path, debug, batch_size, temporal_image_count, sample_process_options=SampleProcessor.Options(), output_sample_types=[], **kwargs):
-        super().__init__(samples_path, debug, batch_size)
+        super().__init__(debug, batch_size)
 
         self.temporal_image_count = temporal_image_count
         self.sample_process_options = sample_process_options
         self.output_sample_types = output_sample_types
 
-        self.samples = SampleLoader.load (SampleType.IMAGE, self.samples_path)
+        self.samples = SampleLoader.load (SampleType.IMAGE, samples_path)
 
         self.generator_samples = [ self.samples ]
         self.generators = [iter_utils.ThisThreadGenerator ( self.batch_func, 0 )] if self.debug else \
@@ -44,7 +46,7 @@ class SampleGeneratorImageTemporal(SampleGeneratorBase):
 
         mult_max = 4
         samples_sub_len = samples_len - ( (self.temporal_image_count)*mult_max - (mult_max-1)  )
-        
+
         if samples_sub_len <= 0:
             raise ValueError('Not enough samples to fit temporal line.')
 
@@ -66,7 +68,7 @@ class SampleGeneratorImageTemporal(SampleGeneratorBase):
                 for i in range( self.temporal_image_count ):
                     sample = samples[ idx+i*mult ]
                     try:
-                        temporal_samples += SampleProcessor.process (sample, self.sample_process_options, self.output_sample_types, self.debug)
+                        temporal_samples += SampleProcessor.process ([sample], self.sample_process_options, self.output_sample_types, self.debug)[0]
                     except:
                         raise Exception ("Exception occured in sample %s. Error: %s" % (sample.filename, traceback.format_exc() ) )
 
