@@ -8,9 +8,6 @@ import numpy as np
 
 from core.interact import interact as io
 from core.leras import nn
-#compatible tf 1.0
-import tensorflow.compat.v1 as tf
-tf.disable_v2_behavior()
 
 
 class XSegNet(object):

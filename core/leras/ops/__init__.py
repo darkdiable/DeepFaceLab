@@ -1,6 +1,3 @@
-#compatible tf 1.0
-import tensorflow.compat.v1 as tf
-tf.disable_v2_behavior()
 import numpy as np
 from core.leras import nn
 tf = nn.tf

@@ -98,8 +98,7 @@ class nn():
                 config = tf.ConfigProto(device_count={'GPU': 0})
             else:
                 nn.tf_default_device = "/GPU:0"
-                #config = tf.ConfigProto()
-                config = tf.compat.v1.ConfigProto()
+                config = tf.ConfigProto()
                 config.gpu_options.visible_device_list = ','.join([str(device.index) for device in device_config.devices])
 
             config.gpu_options.force_gpu_compatible = True
@@ -107,7 +106,7 @@ class nn():
             nn.tf_sess_config = config
             
         if nn.tf_sess is None:
-            nn.tf_sess = tf.compat.v1.Session(config=nn.tf_sess_config)
+            nn.tf_sess = tf.Session(config=nn.tf_sess_config)
 
         if floatx == "float32":
             floatx = nn.tf.float32
@@ -180,7 +179,7 @@ class nn():
             if nn.tf_sess is not None:
                 nn.tf.reset_default_graph()
                 nn.tf_sess.close()
-                nn.tf_sess = nn.tf.compat.v1.Session(config=nn.tf_sess_config)
+                nn.tf_sess = nn.tf.Session(config=nn.tf_sess_config)
 
     @staticmethod
     def close_session():
