@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 from core.interact import interact as io
 from .device import Devices
-import tensorflow.compat.v1 as tf
+
 
 
 class nn():
