@@ -19,6 +19,9 @@ from core.joblib import Subprocessor
 from core.leras import nn
 from DFLIMG import *
 from facelib import LandmarksProcessor
+#compatible tf 1.0
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 
 
 class BlurEstimatorSubprocessor(Subprocessor):

@@ -9,6 +9,9 @@ from core.leras import nn
 from facelib import FaceType
 from models import ModelBase
 from samplelib import *
+#compatible tf 1.0
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
 
 class QModel(ModelBase):
     #override
