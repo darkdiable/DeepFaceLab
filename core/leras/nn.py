@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 from core.interact import interact as io
 from .device import Devices
+import tensorflow.compat.v1 as tf
 
 
 class nn():
@@ -98,8 +99,7 @@ class nn():
                 config = tf.ConfigProto(device_count={'GPU': 0})
             else:
                 nn.tf_default_device = "/GPU:0"
-                #config = tf.ConfigProto()
-                config=tf.compat.v1.ConfigProto()
+                config = tf.ConfigProto()
                 config.gpu_options.visible_device_list = ','.join([str(device.index) for device in device_config.devices])
 
             config.gpu_options.force_gpu_compatible = True
